@@ -3,11 +3,11 @@
 
 # next.js
 /.next
+/build-output
 /out
 
 # build
 /dist
-/build-output
 
 # misc
 .DS_Store
