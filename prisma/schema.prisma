@@ -99,24 +99,38 @@ model ContactSubmission {
 }
 
 model ApplicationSubmission {
-  id                    String   @id @default(cuid())
-  companyName           String
-  contactName           String
-  email                 String
-  phone                 String?
-  website               String?
-  facilityLocation      String
-  gmpCertified          Boolean
-  gmpCertificateBody    String?
-  productName           String
-  productCategory       String
-  dossierUrl            String?
-  message               String
-  status                String   @default("NEW")
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  applicationId      String   @unique
+  companyName        String
+  contactName        String
+  email              String
+  phone              String?
+  website            String?
+  facilityLocation   String
+  gmpCertified       Boolean
+  gmpCertificateBody String?
+  productName        String
+  productCategory    String
+  dossierUrl         String?
+  message            String
+  status             String   @default("SUBMITTED")
+  reviewDecision     String   @default("PENDING")
+  reviewApprovedAt   DateTime?
+  reviewRejectedAt   DateTime?
+  rejectionReason    String?
+  reviewNotes        String?
+  invoiceAmountCents Int?
+  currencyCode       String   @default("USD")
+  invoiceIssuedAt    DateTime?
+  invoiceReference   String?
+  paymentStatus      String   @default("NOT_ISSUED")
+  paidAt             DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   @@index([status, createdAt])
+  @@index([applicationId, createdAt])
+  @@index([reviewDecision, paymentStatus, createdAt])
 }
 
 model VerificationSearchAudit {

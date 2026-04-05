@@ -154,3 +154,13 @@ export async function getBlogPostBySlug(slug: string) {
     return null;
   }
 }
+
+export async function getApplicationSubmissionByApplicationId(applicationId: string) {
+  try {
+    return prisma.applicationSubmission.findUnique({
+      where: { applicationId },
+    });
+  } catch {
+    return null;
+  }
+}

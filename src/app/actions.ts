@@ -10,6 +10,7 @@ import {
   destroyAdminSession,
   requireAdmin,
 } from "@/lib/auth";
+import { generateApplicationId } from "@/lib/application-workflow";
 import { getSiteSettings, searchProductVerifications } from "@/lib/data";
 import { prisma } from "@/lib/prisma";
 import {
@@ -54,6 +55,39 @@ function safeAdminRedirect(path: string) {
 function withQuery(path: string, key: string, value: string) {
   const separator = path.includes("?") ? "&" : "?";
   return `${path}${separator}${key}=${encodeURIComponent(value)}`;
+}
+
+function toNullishUndefined<T>(value: T | null) {
+  return value === null ? undefined : value;
+}
+
+function parseMoneyToCents(value: string) {
+  const normalized = value.replace(/[$,\s]/g, "");
+  if (!normalized) {
+    return null;
+  }
+
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return null;
+  }
+
+  return Math.round(amount * 100);
+}
+
+async function createUniqueApplicationId() {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const applicationId = generateApplicationId();
+    const existing = await prisma.applicationSubmission.findUnique({
+      where: { applicationId },
+    });
+
+    if (!existing) {
+      return applicationId;
+    }
+  }
+
+  throw new Error("Unable to generate a unique application ID.");
 }
 
 function productPayload(formData: FormData) {
@@ -251,16 +285,33 @@ export async function submitApplicationAction(formData: FormData) {
   }
 
   const data = parsed.data;
+  const applicationId = await createUniqueApplicationId();
   await prisma.applicationSubmission.create({
     data: {
+      applicationId,
       ...data,
       website: data.website || undefined,
       dossierUrl: data.dossierUrl || undefined,
+      status: "SUBMITTED",
+      reviewDecision: "PENDING",
+      currencyCode: "USD",
+      paymentStatus: "NOT_ISSUED",
     },
   });
 
+  revalidatePath("/application");
   revalidatePath("/admin/submissions");
-  redirect("/application?submitted=1");
+  redirect(`/application?submitted=1&applicationId=${encodeURIComponent(applicationId)}`);
+}
+
+export async function runApplicationStatusLookupAction(formData: FormData) {
+  const applicationId = stringValue(formData, "applicationId").toUpperCase();
+
+  if (!applicationId) {
+    redirect("/application?lookupError=missing");
+  }
+
+  redirect(`/application?lookup=${encodeURIComponent(applicationId)}`);
 }
 
 export async function runVerificationSearchAction(formData: FormData) {
@@ -438,12 +489,109 @@ export async function updateContactSubmissionStatusAction(formData: FormData) {
   redirect("/admin/submissions");
 }
 
-export async function updateApplicationSubmissionStatusAction(formData: FormData) {
+export async function approveApplicationAction(formData: FormData) {
   await requireAdmin();
+  const id = stringValue(formData, "id");
+  const existing = await prisma.applicationSubmission.findUnique({ where: { id } });
+  const approvedAt = existing?.reviewApprovedAt ?? new Date().toISOString();
+
   await prisma.applicationSubmission.update({
-    where: { id: stringValue(formData, "id") },
-    data: { status: stringValue(formData, "status") },
+    where: { id },
+    data: {
+      status: "APPROVED",
+      reviewDecision: "APPROVED",
+      reviewApprovedAt: approvedAt,
+      reviewRejectedAt: null,
+      rejectionReason: null,
+      reviewNotes: toNullishUndefined(nullableStringValue(formData, "reviewNotes")),
+    },
   });
+
+  revalidatePath("/application");
+  revalidatePath("/admin");
+  revalidatePath("/admin/submissions");
+  redirect("/admin/submissions");
+}
+
+export async function rejectApplicationAction(formData: FormData) {
+  await requireAdmin();
+  const id = stringValue(formData, "id");
+  const existing = await prisma.applicationSubmission.findUnique({ where: { id } });
+  const rejectedAt = existing?.reviewRejectedAt ?? new Date().toISOString();
+  const rejectionReason =
+    stringValue(formData, "rejectionReason") ||
+    "The intake did not meet the current eligibility requirements for review.";
+
+  await prisma.applicationSubmission.update({
+    where: { id },
+    data: {
+      status: "REJECTED",
+      reviewDecision: "REJECTED",
+      reviewRejectedAt: rejectedAt,
+      rejectionReason,
+      reviewNotes: toNullishUndefined(nullableStringValue(formData, "reviewNotes")),
+    },
+  });
+
+  revalidatePath("/application");
+  revalidatePath("/admin");
+  revalidatePath("/admin/submissions");
+  redirect("/admin/submissions");
+}
+
+export async function issueApplicationInvoiceAction(formData: FormData) {
+  await requireAdmin();
+
+  const id = stringValue(formData, "id");
+  const applicationId = stringValue(formData, "applicationId");
+  const amountCents = parseMoneyToCents(stringValue(formData, "invoiceAmount"));
+  const existing = await prisma.applicationSubmission.findUnique({ where: { id } });
+  const invoiceIssuedAt = existing?.invoiceIssuedAt ?? new Date().toISOString();
+
+  if (!amountCents) {
+    redirect("/admin/submissions?error=invoice-amount");
+  }
+
+  const invoiceReference =
+    stringValue(formData, "invoiceReference") ||
+    `INV-${applicationId}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`;
+
+  await prisma.applicationSubmission.update({
+    where: { id },
+    data: {
+      status: "PAYMENT_PENDING",
+      invoiceAmountCents: amountCents,
+      invoiceIssuedAt,
+      invoiceReference,
+      paymentStatus: "INVOICED",
+      currencyCode: stringValue(formData, "currencyCode") || "USD",
+      reviewNotes: toNullishUndefined(nullableStringValue(formData, "reviewNotes")),
+    },
+  });
+
+  revalidatePath("/application");
+  revalidatePath("/admin");
+  revalidatePath("/admin/submissions");
+  redirect("/admin/submissions?invoiced=1");
+}
+
+export async function markApplicationPaidAction(formData: FormData) {
+  await requireAdmin();
+  const id = stringValue(formData, "id");
+  const existing = await prisma.applicationSubmission.findUnique({ where: { id } });
+  const paidAt = existing?.paidAt ?? new Date().toISOString();
+
+  await prisma.applicationSubmission.update({
+    where: { id },
+    data: {
+      status: "IN_PROGRESS",
+      paymentStatus: "PAID",
+      paidAt,
+    },
+  });
+
+  revalidatePath("/application");
+  revalidatePath("/admin");
   revalidatePath("/admin/submissions");
   redirect("/admin/submissions");
 }

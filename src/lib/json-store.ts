@@ -79,6 +79,7 @@ type ContactSubmissionRecord = {
 
 type ApplicationSubmissionRecord = {
   id: string;
+  applicationId: string;
   companyName: string;
   contactName: string;
   email: string;
@@ -92,6 +93,17 @@ type ApplicationSubmissionRecord = {
   dossierUrl?: string;
   message: string;
   status: string;
+  reviewDecision: string;
+  reviewApprovedAt?: string | null;
+  reviewRejectedAt?: string | null;
+  rejectionReason?: string | null;
+  reviewNotes?: string | null;
+  invoiceAmountCents?: number | null;
+  currencyCode: string;
+  invoiceIssuedAt?: string | null;
+  invoiceReference?: string | null;
+  paymentStatus: string;
+  paidAt?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -400,6 +412,30 @@ async function ensureStore() {
       for (const [key, value] of Object.entries(normalizedProduct)) {
         if (product[key as keyof ProductVerificationRecord] !== value) {
           (product as Record<string, unknown>)[key] = value;
+          needsWrite = true;
+        }
+      }
+    }
+
+    for (const application of parsed.applicationSubmissions) {
+      const normalizedApplication = {
+        applicationId: application.applicationId ?? `RLP-LEGACY-${application.id.slice(0, 8).toUpperCase()}`,
+        reviewDecision: application.reviewDecision ?? "PENDING",
+        reviewApprovedAt: application.reviewApprovedAt ?? null,
+        reviewRejectedAt: application.reviewRejectedAt ?? null,
+        rejectionReason: application.rejectionReason ?? null,
+        reviewNotes: application.reviewNotes ?? null,
+        invoiceAmountCents: application.invoiceAmountCents ?? null,
+        currencyCode: application.currencyCode ?? "USD",
+        invoiceIssuedAt: application.invoiceIssuedAt ?? null,
+        invoiceReference: application.invoiceReference ?? null,
+        paymentStatus: application.paymentStatus ?? "NOT_ISSUED",
+        paidAt: application.paidAt ?? null,
+      };
+
+      for (const [key, value] of Object.entries(normalizedApplication)) {
+        if (application[key as keyof ApplicationSubmissionRecord] !== value) {
+          (application as Record<string, unknown>)[key] = value;
           needsWrite = true;
         }
       }
@@ -719,18 +755,53 @@ export const jsonPrisma = {
       const store = await ensureStore();
       return applyTake(sortByOrder(store.applicationSubmissions, orderBy), take);
     },
+    async findUnique({
+      where,
+    }: {
+      where: { id?: string; applicationId?: string };
+    }) {
+      const store = await ensureStore();
+      return (
+        store.applicationSubmissions.find((item) => {
+          if (where.id) {
+            return item.id === where.id;
+          }
+
+          if (where.applicationId) {
+            return item.applicationId === where.applicationId;
+          }
+
+          return false;
+        }) ?? null
+      );
+    },
     async create({
       data,
     }: {
-      data: Omit<ApplicationSubmissionRecord, "id" | "createdAt" | "updatedAt" | "status"> & {
+      data: Omit<
+        ApplicationSubmissionRecord,
+        | "id"
+        | "createdAt"
+        | "updatedAt"
+        | "status"
+        | "reviewDecision"
+        | "currencyCode"
+        | "paymentStatus"
+      > & {
         status?: string;
+        reviewDecision?: string;
+        currencyCode?: string;
+        paymentStatus?: string;
       };
     }) {
       const store = await ensureStore();
       const record: ApplicationSubmissionRecord = {
         ...data,
         id: randomUUID(),
-        status: data.status || "NEW",
+        status: data.status || "SUBMITTED",
+        reviewDecision: data.reviewDecision || "PENDING",
+        currencyCode: data.currencyCode || "USD",
+        paymentStatus: data.paymentStatus || "NOT_ISSUED",
         createdAt: now(),
         updatedAt: now(),
       };
