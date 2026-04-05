@@ -1,0 +1,120 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("admin")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model SiteSettings {
+  id                String   @id @default("main")
+  organizationName  String
+  heroTagline       String
+  heroHeadline      String
+  heroSubheadline   String
+  supportEmail      String
+  supportPhone      String
+  supportHours      String
+  addressLine1      String
+  addressLine2      String
+  footerStatement   String
+  updatedAt         DateTime @updatedAt
+}
+
+model ProductVerification {
+  id                String   @id @default(cuid())
+  brandName         String
+  productName       String
+  category          String
+  upc               String?  @unique
+  verificationCode  String   @unique
+  lotNumber         String?
+  certificateStatus String
+  status            String
+  purityScore       Float?
+  contaminants      String?
+  activeIngredients String?
+  notes             String?
+  badgeLabel        String?
+  hero              Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([hero, updatedAt])
+  @@index([brandName])
+  @@index([productName])
+}
+
+model BlogPost {
+  id          String   @id @default(cuid())
+  title       String
+  slug        String   @unique
+  excerpt     String
+  category    String
+  authorName  String
+  coverImage  String?
+  contentHtml String
+  publishedAt DateTime
+  featured    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([featured, publishedAt])
+}
+
+model ContactSubmission {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  company   String?
+  reason    String
+  message   String
+  status    String   @default("NEW")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model ApplicationSubmission {
+  id                    String   @id @default(cuid())
+  companyName           String
+  contactName           String
+  email                 String
+  phone                 String?
+  website               String?
+  facilityLocation      String
+  gmpCertified          Boolean
+  gmpCertificateBody    String?
+  productName           String
+  productCategory       String
+  dossierUrl            String?
+  message               String
+  status                String   @default("NEW")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model VerificationSearchAudit {
+  id             String   @id @default(cuid())
+  query          String
+  normalized     String
+  matchedProduct String?
+  createdAt      DateTime @default(now())
+
+  @@index([normalized, createdAt])
+}
