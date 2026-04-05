@@ -11,8 +11,14 @@ import {
   verifyPassword,
 } from "@/lib/auth";
 import { getAdminEmailFromAccount } from "@/lib/admin-config";
-import { findProductVerification } from "@/lib/data";
+import { getSiteSettings, searchProductVerifications } from "@/lib/data";
 import { prisma } from "@/lib/prisma";
+import {
+  buildVerificationPdf,
+  buildVerificationSearchText,
+  parseSupplementFactsCsv,
+  serializeVerificationAnalytes,
+} from "@/lib/verification-dossier";
 import { normalizeSearchQuery } from "@/lib/utils";
 
 function stringValue(formData: FormData, key: string) {
@@ -23,8 +29,67 @@ function booleanValue(formData: FormData, key: string) {
   return formData.get(key) === "on";
 }
 
+function nullableStringValue(formData: FormData, key: string) {
+  return stringValue(formData, key) || null;
+}
+
+function nullableNumberValue(formData: FormData, key: string) {
+  const raw = stringValue(formData, key);
+  if (!raw) {
+    return null;
+  }
+
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function fileValue(formData: FormData, key: string) {
+  const value = formData.get(key);
+  return value instanceof File && value.size > 0 ? value : null;
+}
+
 function safeAdminRedirect(path: string) {
   return path.startsWith("/admin") ? path : "/admin";
+}
+
+function withQuery(path: string, key: string, value: string) {
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}${key}=${encodeURIComponent(value)}`;
+}
+
+function productPayload(formData: FormData) {
+  return {
+    brandName: stringValue(formData, "brandName"),
+    productName: stringValue(formData, "productName"),
+    category: stringValue(formData, "category"),
+    upc: nullableStringValue(formData, "upc"),
+    verificationCode: stringValue(formData, "verificationCode"),
+    lotNumber: nullableStringValue(formData, "lotNumber"),
+    certificateStatus: stringValue(formData, "certificateStatus"),
+    status: stringValue(formData, "status"),
+    purityScore: nullableNumberValue(formData, "purityScore"),
+    contaminants: nullableStringValue(formData, "contaminants"),
+    activeIngredients: nullableStringValue(formData, "activeIngredients"),
+    notes: nullableStringValue(formData, "notes"),
+    badgeLabel: nullableStringValue(formData, "badgeLabel"),
+    hero: booleanValue(formData, "hero"),
+  };
+}
+
+async function upsertProductRecord(
+  id: string,
+  payload: ReturnType<typeof productPayload> & Record<string, unknown>,
+) {
+  if (id) {
+    return prisma.productVerification.update({
+      where: { id },
+      data: payload,
+    });
+  }
+
+  return prisma.productVerification.create({
+    data: payload,
+  });
 }
 
 export async function signInAction(formData: FormData) {
@@ -140,12 +205,18 @@ export async function runVerificationSearchAction(formData: FormData) {
     redirect("/verify?error=1");
   }
 
-  const result = await findProductVerification(query);
+  const results = await searchProductVerifications(query);
   await prisma.verificationSearchAudit.create({
     data: {
       query,
       normalized,
-      matchedProduct: result ? `${result.brandName} ${result.productName}` : null,
+      matchedProduct:
+        results.length > 0
+          ? results
+              .slice(0, 3)
+              .map((result) => `${result.brandName} ${result.productName}`)
+              .join(", ")
+          : null,
     },
   });
 
@@ -159,6 +230,8 @@ export async function saveSiteSettingsAction(formData: FormData) {
     where: { id: "main" },
     update: {
       organizationName: stringValue(formData, "organizationName"),
+      issuingEntityName:
+        nullableStringValue(formData, "issuingEntityName") || stringValue(formData, "organizationName"),
       heroTagline: stringValue(formData, "heroTagline"),
       heroHeadline: stringValue(formData, "heroHeadline"),
       heroSubheadline: stringValue(formData, "heroSubheadline"),
@@ -172,6 +245,8 @@ export async function saveSiteSettingsAction(formData: FormData) {
     create: {
       id: "main",
       organizationName: stringValue(formData, "organizationName"),
+      issuingEntityName:
+        nullableStringValue(formData, "issuingEntityName") || stringValue(formData, "organizationName"),
       heroTagline: stringValue(formData, "heroTagline"),
       heroHeadline: stringValue(formData, "heroHeadline"),
       heroSubheadline: stringValue(formData, "heroSubheadline"),
@@ -194,38 +269,102 @@ export async function saveProductAction(formData: FormData) {
   await requireAdmin();
 
   const id = stringValue(formData, "id");
-  const payload = {
-    brandName: stringValue(formData, "brandName"),
-    productName: stringValue(formData, "productName"),
-    category: stringValue(formData, "category"),
-    upc: stringValue(formData, "upc") || null,
-    verificationCode: stringValue(formData, "verificationCode"),
-    lotNumber: stringValue(formData, "lotNumber") || null,
-    certificateStatus: stringValue(formData, "certificateStatus"),
-    status: stringValue(formData, "status"),
-    purityScore: Number(stringValue(formData, "purityScore") || 0),
-    contaminants: stringValue(formData, "contaminants") || null,
-    activeIngredients: stringValue(formData, "activeIngredients") || null,
-    notes: stringValue(formData, "notes") || null,
-    badgeLabel: stringValue(formData, "badgeLabel") || null,
-    hero: booleanValue(formData, "hero"),
-  };
+  const payload = productPayload(formData);
 
-  if (id) {
-    await prisma.productVerification.update({
-      where: { id },
-      data: payload,
-    });
-  } else {
-    await prisma.productVerification.create({
-      data: payload,
-    });
-  }
+  await upsertProductRecord(id, payload);
 
   revalidatePath("/");
   revalidatePath("/verify");
   revalidatePath("/admin/products");
   redirect(safeAdminRedirect(stringValue(formData, "redirectTo") || "/admin/products"));
+}
+
+export async function verifyProductConfirmationAction(formData: FormData) {
+  await requireAdmin();
+
+  const id = stringValue(formData, "id");
+  const redirectTo = safeAdminRedirect(stringValue(formData, "redirectTo") || "/admin/products");
+  const uploadedCsv = fileValue(formData, "supplementFactsCsv");
+  const existingProduct = id
+    ? await prisma.productVerification.findUnique({
+        where: { id },
+      })
+    : null;
+
+  const csvText = uploadedCsv ? await uploadedCsv.text() : existingProduct?.supplementFactsCsv || "";
+  if (!csvText) {
+    redirect(withQuery(redirectTo, "error", "missing-csv"));
+  }
+
+  let analytes;
+  try {
+    analytes = parseSupplementFactsCsv(csvText);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Unable to parse the CSV file.";
+    redirect(withQuery(withQuery(redirectTo, "error", "invalid-csv"), "message", reason));
+  }
+
+  const basePayload = productPayload(formData);
+  const issuedAt = new Date();
+  const averagePercent =
+    analytes.reduce((sum, analyte) => sum + analyte.percentOfLabelClaim, 0) / analytes.length;
+  const settings = await getSiteSettings();
+  const verificationPdfFileName = `${[
+    basePayload.brandName,
+    basePayload.productName,
+    basePayload.verificationCode,
+  ]
+    .join("-")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")}-verification-confirmation.pdf`;
+
+  const verificationPdfBase64 = await buildVerificationPdf({
+    brandName: basePayload.brandName,
+    productName: basePayload.productName,
+    category: basePayload.category,
+    verificationCode: basePayload.verificationCode,
+    lotNumber: basePayload.lotNumber,
+    issuedAt,
+    issuingEntityName: settings.issuingEntityName || settings.organizationName,
+    addressLine1: settings.addressLine1,
+    addressLine2: settings.addressLine2,
+    supportPhone: settings.supportPhone,
+    analytes,
+  });
+
+  await upsertProductRecord(id, {
+    ...basePayload,
+    certificateStatus: "ACTIVE",
+    status: "VERIFIED",
+    purityScore: Number(averagePercent.toFixed(2)),
+    activeIngredients: `${analytes.length} analytes confirmed within the accepted label-claim interval.`,
+    servingSize: analytes[0]?.servingSize || null,
+    supplementFactsCsv: csvText,
+    supplementFactsFileName:
+      uploadedCsv?.name || existingProduct?.supplementFactsFileName || "supplement-facts.csv",
+    analyteResultsJson: serializeVerificationAnalytes(analytes),
+    verificationPdfBase64,
+    verificationPdfFileName,
+    verificationSearchText: buildVerificationSearchText({
+      brandName: basePayload.brandName,
+      productName: basePayload.productName,
+      verificationCode: basePayload.verificationCode,
+      lotNumber: basePayload.lotNumber,
+      upc: basePayload.upc,
+      category: basePayload.category,
+      analytes,
+    }),
+    verifiedAt: issuedAt,
+    notes:
+      basePayload.notes ||
+      "Analytical verification confirmation generated from the uploaded Supplement Facts dossier.",
+  });
+
+  revalidatePath("/");
+  revalidatePath("/verify");
+  revalidatePath("/admin/products");
+  redirect(withQuery(redirectTo, "verified", "1"));
 }
 
 export async function deleteProductAction(formData: FormData) {

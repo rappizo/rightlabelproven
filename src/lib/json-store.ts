@@ -37,6 +37,14 @@ type ProductVerificationRecord = {
   activeIngredients: string | null;
   notes: string | null;
   badgeLabel: string | null;
+  servingSize?: string | null;
+  supplementFactsCsv?: string | null;
+  supplementFactsFileName?: string | null;
+  analyteResultsJson?: string | null;
+  verificationPdfBase64?: string | null;
+  verificationPdfFileName?: string | null;
+  verificationSearchText?: string | null;
+  verifiedAt?: string | null;
   hero: boolean;
   createdAt: string;
   updatedAt: string;
@@ -228,6 +236,14 @@ async function createInitialStore() {
         activeIngredients: "Label sync 100%",
         notes: "Verified via multi-point laboratory assessment.",
         badgeLabel: "PLATINUM",
+        servingSize: null,
+        supplementFactsCsv: null,
+        supplementFactsFileName: null,
+        analyteResultsJson: null,
+        verificationPdfBase64: null,
+        verificationPdfFileName: null,
+        verificationSearchText: null,
+        verifiedAt: null,
         hero: true,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -247,6 +263,14 @@ async function createInitialStore() {
         activeIngredients: "Organic traceability confirmed",
         notes: "Batch passed HPLC and mass spectrometry review.",
         badgeLabel: "GOLD",
+        servingSize: null,
+        supplementFactsCsv: null,
+        supplementFactsFileName: null,
+        analyteResultsJson: null,
+        verificationPdfBase64: null,
+        verificationPdfFileName: null,
+        verificationSearchText: null,
+        verifiedAt: null,
         hero: true,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -266,6 +290,14 @@ async function createInitialStore() {
         activeIngredients: "Actives within tolerance",
         notes: "Random retail pull matched the submitted dossier.",
         badgeLabel: "CERTIFIED",
+        servingSize: null,
+        supplementFactsCsv: null,
+        supplementFactsFileName: null,
+        analyteResultsJson: null,
+        verificationPdfBase64: null,
+        verificationPdfFileName: null,
+        verificationSearchText: null,
+        verifiedAt: null,
         hero: true,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -344,6 +376,32 @@ async function ensureStore() {
         post.coverImage = LOCAL_SECTION_IMAGE;
         post.updatedAt = now();
         needsWrite = true;
+      }
+    }
+
+    if (!parsed.siteSettings.issuingEntityName) {
+      parsed.siteSettings.issuingEntityName = parsed.siteSettings.organizationName;
+      parsed.siteSettings.updatedAt = now();
+      needsWrite = true;
+    }
+
+    for (const product of parsed.productVerifications) {
+      const normalizedProduct = {
+        servingSize: product.servingSize ?? null,
+        supplementFactsCsv: product.supplementFactsCsv ?? null,
+        supplementFactsFileName: product.supplementFactsFileName ?? null,
+        analyteResultsJson: product.analyteResultsJson ?? null,
+        verificationPdfBase64: product.verificationPdfBase64 ?? null,
+        verificationPdfFileName: product.verificationPdfFileName ?? null,
+        verificationSearchText: product.verificationSearchText ?? null,
+        verifiedAt: product.verifiedAt ?? null,
+      };
+
+      for (const [key, value] of Object.entries(normalizedProduct)) {
+        if (product[key as keyof ProductVerificationRecord] !== value) {
+          (product as Record<string, unknown>)[key] = value;
+          needsWrite = true;
+        }
       }
     }
 

@@ -55,6 +55,7 @@ async function main() {
     create: {
       id: "main",
       organizationName: "Right Label Proven",
+      issuingEntityName: "Right Label Proven, Inc.",
       heroTagline: "RLP Launch Phase",
       heroHeadline: "The New Standard in Supplement Transparency",
       heroSubheadline:

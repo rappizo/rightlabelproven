@@ -17,6 +17,7 @@ export default async function AdminSettingsPage() {
         <h2 className="font-display text-2xl font-bold">Brand & contact settings</h2>
         <form action={saveSiteSettingsAction} className="mt-6 grid gap-4 md:grid-cols-2">
           <input name="organizationName" defaultValue={settings.organizationName} required className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 outline-none" />
+          <input name="issuingEntityName" defaultValue={settings.issuingEntityName || settings.organizationName} placeholder="Issuing entity / legal name" className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 outline-none" />
           <input name="heroTagline" defaultValue={settings.heroTagline} required className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 outline-none" />
           <input name="supportEmail" defaultValue={settings.supportEmail} required className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 outline-none" />
           <input name="supportPhone" defaultValue={settings.supportPhone} required className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 outline-none" />

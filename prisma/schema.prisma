@@ -21,6 +21,7 @@ model AdminUser {
 model SiteSettings {
   id                String   @id @default("main")
   organizationName  String
+  issuingEntityName String?
   heroTagline       String
   heroHeadline      String
   heroSubheadline   String
@@ -48,6 +49,14 @@ model ProductVerification {
   activeIngredients String?
   notes             String?
   badgeLabel        String?
+  servingSize       String?
+  supplementFactsCsv String?
+  supplementFactsFileName String?
+  analyteResultsJson String?
+  verificationPdfBase64 String?
+  verificationPdfFileName String?
+  verificationSearchText String?
+  verifiedAt        DateTime?
   hero              Boolean  @default(false)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -55,6 +64,7 @@ model ProductVerification {
   @@index([hero, updatedAt])
   @@index([brandName])
   @@index([productName])
+  @@index([verifiedAt])
 }
 
 model BlogPost {

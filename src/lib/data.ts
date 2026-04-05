@@ -2,6 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 import { fallbackSettings } from "@/lib/seed-data";
+import { deserializeVerificationAnalytes } from "@/lib/verification-dossier";
 import { normalizeSearchQuery } from "@/lib/utils";
 
 export async function getSiteSettings() {
@@ -31,36 +32,102 @@ export async function getFeaturedProducts() {
 export async function getAllProducts() {
   try {
     return prisma.productVerification.findMany({
-      orderBy: [{ hero: "desc" }, { brandName: "asc" }],
+      orderBy: [{ verifiedAt: "desc" }, { hero: "desc" }, { brandName: "asc" }],
     });
   } catch {
     return [];
   }
 }
 
-export async function findProductVerification(query: string) {
+function buildProductSearchHaystack(product: Awaited<ReturnType<typeof getAllProducts>>[number]) {
+  const analyteNames = deserializeVerificationAnalytes(product.analyteResultsJson)
+    .map((analyte) => analyte.ingredient)
+    .join(" ");
+
+  return normalizeSearchQuery(
+    [
+      product.brandName,
+      product.productName,
+      product.upc ?? "",
+      product.verificationCode,
+      product.lotNumber ?? "",
+      product.category,
+      product.verificationSearchText ?? "",
+      analyteNames,
+    ].join(" "),
+  );
+}
+
+function scoreProductMatch(
+  product: Awaited<ReturnType<typeof getAllProducts>>[number],
+  normalizedQuery: string,
+) {
+  const exactProduct = normalizeSearchQuery(`${product.brandName} ${product.productName}`);
+  const exactBrand = normalizeSearchQuery(product.brandName);
+  const haystack = buildProductSearchHaystack(product);
+  const terms = normalizedQuery.split(" ");
+
+  let score = 0;
+
+  if (exactProduct === normalizedQuery) {
+    score += 300;
+  }
+
+  if (exactBrand === normalizedQuery) {
+    score += 220;
+  }
+
+  if (product.verificationCode.toLowerCase() === normalizedQuery) {
+    score += 200;
+  }
+
+  if (haystack.includes(normalizedQuery)) {
+    score += 120;
+  }
+
+  score += terms.filter((term) => haystack.includes(term)).length * 15;
+
+  if (product.verifiedAt) {
+    score += 12;
+  }
+
+  if (product.hero) {
+    score += 4;
+  }
+
+  return score;
+}
+
+export async function searchProductVerifications(query: string) {
   const normalized = normalizeSearchQuery(query);
   if (!normalized) {
-    return null;
+    return [];
   }
 
   const products = await getAllProducts();
+  const terms = normalized.split(" ");
 
-  return (
-    products.find((product) => {
-      const fields = [
-        product.brandName,
-        product.productName,
-        product.upc ?? "",
-        product.verificationCode,
-        product.lotNumber ?? "",
-      ]
-        .join(" ")
-        .toLowerCase();
+  return products
+    .filter((product) => {
+      const haystack = buildProductSearchHaystack(product);
+      return haystack.includes(normalized) || terms.every((term) => haystack.includes(term));
+    })
+    .sort((left, right) => scoreProductMatch(right, normalized) - scoreProductMatch(left, normalized));
+}
 
-      return fields.includes(normalized);
-    }) ?? null
-  );
+export async function findProductVerification(query: string) {
+  const results = await searchProductVerifications(query);
+  return results[0] ?? null;
+}
+
+export async function getProductVerificationById(id: string) {
+  try {
+    return prisma.productVerification.findUnique({
+      where: { id },
+    });
+  } catch {
+    return null;
+  }
 }
 
 export async function getBlogPosts() {
