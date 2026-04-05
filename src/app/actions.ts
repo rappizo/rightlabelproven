@@ -91,6 +91,86 @@ async function upsertProductRecord(
   });
 }
 
+async function buildVerificationPayload(options: {
+  formData: FormData;
+  basePayload: ReturnType<typeof productPayload>;
+  existingProduct: Awaited<ReturnType<typeof prisma.productVerification.findUnique>>;
+  errorRedirectTo: string;
+}) {
+  const { formData, basePayload, existingProduct, errorRedirectTo } = options;
+  const uploadedCsv = fileValue(formData, "supplementFactsCsv");
+  const csvText = uploadedCsv
+    ? await uploadedCsv.text()
+    : existingProduct?.supplementFactsCsv?.trim() || "";
+
+  if (!csvText) {
+    return null;
+  }
+
+  let analytes;
+  try {
+    analytes = parseSupplementFactsCsv(csvText);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Unable to parse the CSV file.";
+    redirect(withQuery(withQuery(errorRedirectTo, "error", "invalid-csv"), "message", reason));
+  }
+
+  const issuedAt = new Date();
+  const averagePercent =
+    analytes.reduce((sum, analyte) => sum + analyte.percentOfLabelClaim, 0) / analytes.length;
+  const settings = await getSiteSettings();
+  const verificationPdfFileName = `${[
+    basePayload.brandName,
+    basePayload.productName,
+    basePayload.verificationCode,
+  ]
+    .join("-")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")}-verification-confirmation.pdf`;
+
+  const verificationPdfBase64 = await buildVerificationPdf({
+    brandName: basePayload.brandName,
+    productName: basePayload.productName,
+    category: basePayload.category,
+    verificationCode: basePayload.verificationCode,
+    lotNumber: basePayload.lotNumber,
+    issuedAt,
+    issuingEntityName: settings.issuingEntityName || settings.organizationName,
+    addressLine1: settings.addressLine1,
+    addressLine2: settings.addressLine2,
+    supportPhone: settings.supportPhone,
+    analytes,
+  });
+
+  return {
+    certificateStatus: "ACTIVE",
+    status: "VERIFIED",
+    purityScore: Number(averagePercent.toFixed(2)),
+    activeIngredients: `${analytes.length} analytes confirmed within the accepted label-claim interval.`,
+    servingSize: analytes[0]?.servingSize || null,
+    supplementFactsCsv: csvText,
+    supplementFactsFileName:
+      uploadedCsv?.name || existingProduct?.supplementFactsFileName || "supplement-facts.csv",
+    analyteResultsJson: serializeVerificationAnalytes(analytes),
+    verificationPdfBase64,
+    verificationPdfFileName,
+    verificationSearchText: buildVerificationSearchText({
+      brandName: basePayload.brandName,
+      productName: basePayload.productName,
+      verificationCode: basePayload.verificationCode,
+      lotNumber: basePayload.lotNumber,
+      upc: basePayload.upc,
+      category: basePayload.category,
+      analytes,
+    }),
+    verifiedAt: issuedAt,
+    notes:
+      basePayload.notes ||
+      "Analytical verification confirmation generated from the uploaded Supplement Facts dossier.",
+  };
+}
+
 export async function signInAction(formData: FormData) {
   const account = stringValue(formData, "account");
   const password = stringValue(formData, "password");
@@ -254,102 +334,31 @@ export async function saveProductAction(formData: FormData) {
   await requireAdmin();
 
   const id = stringValue(formData, "id");
-  const payload = productPayload(formData);
-
-  await upsertProductRecord(id, payload);
-
-  revalidatePath("/");
-  revalidatePath("/verify");
-  revalidatePath("/admin/products");
-  redirect(safeAdminRedirect(stringValue(formData, "redirectTo") || "/admin/products"));
-}
-
-export async function verifyProductConfirmationAction(formData: FormData) {
-  await requireAdmin();
-
-  const id = stringValue(formData, "id");
   const redirectTo = safeAdminRedirect(stringValue(formData, "redirectTo") || "/admin/products");
-  const uploadedCsv = fileValue(formData, "supplementFactsCsv");
+  const errorRedirectTo =
+    safeAdminRedirect(stringValue(formData, "errorRedirectTo") || redirectTo);
+  const payload = productPayload(formData);
   const existingProduct = id
     ? await prisma.productVerification.findUnique({
         where: { id },
       })
     : null;
-
-  const csvText = uploadedCsv ? await uploadedCsv.text() : existingProduct?.supplementFactsCsv || "";
-  if (!csvText) {
-    redirect(withQuery(redirectTo, "error", "missing-csv"));
-  }
-
-  let analytes;
-  try {
-    analytes = parseSupplementFactsCsv(csvText);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : "Unable to parse the CSV file.";
-    redirect(withQuery(withQuery(redirectTo, "error", "invalid-csv"), "message", reason));
-  }
-
-  const basePayload = productPayload(formData);
-  const issuedAt = new Date();
-  const averagePercent =
-    analytes.reduce((sum, analyte) => sum + analyte.percentOfLabelClaim, 0) / analytes.length;
-  const settings = await getSiteSettings();
-  const verificationPdfFileName = `${[
-    basePayload.brandName,
-    basePayload.productName,
-    basePayload.verificationCode,
-  ]
-    .join("-")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")}-verification-confirmation.pdf`;
-
-  const verificationPdfBase64 = await buildVerificationPdf({
-    brandName: basePayload.brandName,
-    productName: basePayload.productName,
-    category: basePayload.category,
-    verificationCode: basePayload.verificationCode,
-    lotNumber: basePayload.lotNumber,
-    issuedAt,
-    issuingEntityName: settings.issuingEntityName || settings.organizationName,
-    addressLine1: settings.addressLine1,
-    addressLine2: settings.addressLine2,
-    supportPhone: settings.supportPhone,
-    analytes,
+  const verificationPayload = await buildVerificationPayload({
+    formData,
+    basePayload: payload,
+    existingProduct,
+    errorRedirectTo,
   });
 
   await upsertProductRecord(id, {
-    ...basePayload,
-    certificateStatus: "ACTIVE",
-    status: "VERIFIED",
-    purityScore: Number(averagePercent.toFixed(2)),
-    activeIngredients: `${analytes.length} analytes confirmed within the accepted label-claim interval.`,
-    servingSize: analytes[0]?.servingSize || null,
-    supplementFactsCsv: csvText,
-    supplementFactsFileName:
-      uploadedCsv?.name || existingProduct?.supplementFactsFileName || "supplement-facts.csv",
-    analyteResultsJson: serializeVerificationAnalytes(analytes),
-    verificationPdfBase64,
-    verificationPdfFileName,
-    verificationSearchText: buildVerificationSearchText({
-      brandName: basePayload.brandName,
-      productName: basePayload.productName,
-      verificationCode: basePayload.verificationCode,
-      lotNumber: basePayload.lotNumber,
-      upc: basePayload.upc,
-      category: basePayload.category,
-      analytes,
-    }),
-    verifiedAt: issuedAt,
-    notes:
-      basePayload.notes ||
-      "Analytical verification confirmation generated from the uploaded Supplement Facts dossier.",
+    ...payload,
+    ...(verificationPayload ?? {}),
   });
 
   revalidatePath("/");
   revalidatePath("/verify");
   revalidatePath("/admin/products");
-  redirect(withQuery(redirectTo, "verified", "1"));
+  redirect(withQuery(redirectTo, "saved", "1"));
 }
 
 export async function deleteProductAction(formData: FormData) {
