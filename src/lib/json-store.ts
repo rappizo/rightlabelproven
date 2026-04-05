@@ -447,6 +447,69 @@ export const jsonPrisma = {
 
       return applySelect(item, select);
     },
+    async findFirst({
+      orderBy,
+      select,
+    }: {
+      orderBy?: Record<string, OrderDirection> | Array<Record<string, OrderDirection>>;
+      select?: Record<string, boolean>;
+    } = {}) {
+      const store = await ensureStore();
+      const sorted = sortByOrder(store.adminUsers, orderBy);
+      return applySelect(sorted[0] ?? null, select);
+    },
+    async create({
+      data,
+      select,
+    }: {
+      data: Omit<AdminUserRecord, "id" | "createdAt" | "updatedAt">;
+      select?: Record<string, boolean>;
+    }) {
+      const store = await ensureStore();
+      const record: AdminUserRecord = {
+        ...data,
+        id: randomUUID(),
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      store.adminUsers.push(record);
+      await saveStore(store);
+      return applySelect(record, select);
+    },
+    async update({
+      where,
+      data,
+      select,
+    }: {
+      where: { id?: string; email?: string };
+      data: Partial<AdminUserRecord>;
+      select?: Record<string, boolean>;
+    }) {
+      const store = await ensureStore();
+      const index = store.adminUsers.findIndex((user) => {
+        if (where.id) {
+          return user.id === where.id;
+        }
+
+        if (where.email) {
+          return user.email === where.email;
+        }
+
+        return false;
+      });
+
+      if (index === -1) {
+        throw new Error("Admin user not found");
+      }
+
+      store.adminUsers[index] = {
+        ...store.adminUsers[index],
+        ...data,
+        updatedAt: now(),
+      };
+      await saveStore(store);
+      return applySelect(store.adminUsers[index], select);
+    },
   },
   siteSettings: {
     async findUnique(args?: { where?: { id: string } }) {

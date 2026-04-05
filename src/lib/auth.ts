@@ -4,10 +4,19 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { verifyPasswordHash } from "@/lib/passwords";
+import { getAdminSeedConfig, normalizeAdminAccount } from "@/lib/admin-config";
+import { createPasswordHash, verifyPasswordHash } from "@/lib/passwords";
 import { prisma } from "@/lib/prisma";
 
 const ADMIN_COOKIE = "rlp_admin_session";
+
+type AdminRecord = {
+  id: string;
+  name: string;
+  email: string;
+  passwordHash: string;
+  role: string;
+};
 
 function getSecret() {
   return new TextEncoder().encode(
@@ -17,6 +26,85 @@ function getSecret() {
 
 export async function verifyPassword(password: string, hash: string) {
   return verifyPasswordHash(password, hash);
+}
+
+async function syncConfiguredAdminRecord() {
+  const adminConfig = getAdminSeedConfig();
+  const select = {
+    id: true,
+    name: true,
+    email: true,
+    passwordHash: true,
+    role: true,
+  } as const;
+
+  let admin = (await prisma.adminUser.findUnique({
+    where: { email: adminConfig.email },
+    select,
+  })) as AdminRecord | null;
+
+  if (!admin) {
+    const legacyAdmin = (await prisma.adminUser.findFirst({
+      orderBy: { createdAt: "asc" },
+      select,
+    })) as AdminRecord | null;
+    const passwordHash = await createPasswordHash(adminConfig.password);
+
+    if (legacyAdmin) {
+      admin = (await prisma.adminUser.update({
+        where: { id: legacyAdmin.id },
+        data: {
+          name: adminConfig.name,
+          email: adminConfig.email,
+          passwordHash,
+        },
+        select,
+      })) as AdminRecord;
+    } else {
+      admin = (await prisma.adminUser.create({
+        data: {
+          name: adminConfig.name,
+          email: adminConfig.email,
+          passwordHash,
+          role: "admin",
+        },
+        select,
+      })) as AdminRecord;
+    }
+  }
+
+  const passwordMatches = await verifyPasswordHash(adminConfig.password, admin.passwordHash);
+  if (!passwordMatches || admin.name !== adminConfig.name || admin.email !== adminConfig.email) {
+    admin = (await prisma.adminUser.update({
+      where: { id: admin.id },
+      data: {
+        name: adminConfig.name,
+        email: adminConfig.email,
+        passwordHash: await createPasswordHash(adminConfig.password),
+      },
+      select,
+    })) as AdminRecord;
+  }
+
+  return {
+    admin,
+    adminConfig,
+  };
+}
+
+export async function authenticateConfiguredAdmin(account: string, password: string) {
+  const normalizedAccount = normalizeAdminAccount(account);
+  const { admin, adminConfig } = await syncConfiguredAdminRecord();
+
+  if (normalizedAccount !== adminConfig.account) {
+    return null;
+  }
+
+  if (password !== adminConfig.password) {
+    return null;
+  }
+
+  return admin;
 }
 
 export async function createAdminSession(adminUserId: string, email: string) {

@@ -5,12 +5,11 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import {
+  authenticateConfiguredAdmin,
   createAdminSession,
   destroyAdminSession,
   requireAdmin,
-  verifyPassword,
 } from "@/lib/auth";
-import { getAdminEmailFromAccount } from "@/lib/admin-config";
 import { getSiteSettings, searchProductVerifications } from "@/lib/data";
 import { prisma } from "@/lib/prisma";
 import {
@@ -93,25 +92,11 @@ async function upsertProductRecord(
 }
 
 export async function signInAction(formData: FormData) {
-  const account = stringValue(formData, "account").toLowerCase();
-  const email = getAdminEmailFromAccount(account);
+  const account = stringValue(formData, "account");
   const password = stringValue(formData, "password");
 
-  const admin = (await prisma.adminUser.findUnique({
-    where: { email },
-  })) as {
-    id: string;
-    email: string;
-    passwordHash: string;
-    name: string;
-    role: string;
-  } | null;
+  const admin = await authenticateConfiguredAdmin(account, password);
   if (!admin) {
-    redirect("/admin/login?error=1");
-  }
-
-  const valid = await verifyPassword(password, admin.passwordHash);
-  if (!valid) {
     redirect("/admin/login?error=1");
   }
 

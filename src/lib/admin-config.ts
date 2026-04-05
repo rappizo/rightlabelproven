@@ -1,4 +1,4 @@
-function normalizeAdminAccount(value: string) {
+export function normalizeAdminAccount(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
 }
 
