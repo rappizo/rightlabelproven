@@ -331,7 +331,7 @@ export default async function HomePage() {
         <div className="grid gap-6 md:grid-cols-3">
           {advisors.map((advisor) => (
             <article key={advisor.name} className="overflow-hidden rounded-[2rem] border border-line bg-white shadow-panel">
-              <div className="relative aspect-[4/3] overflow-hidden bg-slate-100">
+              <div className="relative aspect-square overflow-hidden bg-slate-100">
                 {/* Using a native img avoids Vercel image transformation usage. */}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
